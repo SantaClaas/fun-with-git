@@ -135,4 +135,11 @@ let commits = CommitGraph.listCommits repository |> Seq.take 10 |> Seq.toArray
 
 
 let sorted = CommitGraph.sortTemporalTopological commits
-CommitGraph.curvedBranches sorted
+let coordinates = CommitGraph.curvedBranches sorted |> Seq.toArray
+let maxX, _, _ = coordinates |> Array.maxBy (fun (x, _, _) -> x)
+let _, maxY, _ = coordinates |> Array.maxBy (fun (_, y, _) -> y)
+let grid = Array2D.create (maxX + 1) (maxY + 1) None
+for x, y, commit in coordinates do
+    Array2D.set grid x y (Some commit)
+
+printfn $"{grid}"

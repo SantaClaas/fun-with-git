@@ -33,8 +33,6 @@ type Commit =
     override this.GetHashCode() = this.id.GetHashCode()
 
 
-type CommitLocation = { commit: Commit; x: int; y: int }
-
 
 let sortTemporalTopological (commits: Commit array) =
     let mutable ordered = List()
@@ -75,47 +73,46 @@ let mergeChildrenOf (commit: Commit) =
 
 let curvedBranches (orderedCommits: Commit List) =
 
+    seq {
+        let branches = List()
 
-    let branches = List()
+        for y = 0 to orderedCommits.Count - 1 do
+            let commit = orderedCommits[y]
+            let branchChildren = branchChildrenOf commit
 
+            let x =
+                if branchChildren.Length <> 0 then
 
-    for index = 0 to orderedCommits.Count - 1 do
-        let commit = orderedCommits[index]
-        let branchChildren = branchChildrenOf commit
+                    // We follow the first (or latest as in time/with the biggest date) branch that has our current branch as as parent
+                    // This should increase straightness of branches because of smaller gaps
+                    let bran =
+                        branches
+                        |> Seq.filter (fun branch -> branchChildren |> Array.contains branch)
+                        |> Seq.maxBy (fun commit -> commit.date)
 
-        let x =
-            if branchChildren.Length <> 0 then
+                    let index = branches.LastIndexOf bran
 
-                // We follow the first (or latest as in time/with the biggest date) branch that has our current branch as as parent
-                // This should increase straightness of branches because of smaller gaps
-                let bran =
-                    branches
-                    |> Seq.filter (fun branch -> branchChildren |> Array.contains branch)
-                    |> Seq.maxBy (fun commit -> commit.date)
+                    // "select d in c.branchChildren"
+                    // "replace d by c in B"
+                    for index = 0 to branches.Count - 1 do
+                        for descendant in branchChildren do
+                            let branchCommit = branches[index]
 
-                let i = branches.LastIndexOf bran
+                            if branchCommit = descendant then
+                                branches[index] <- commit
 
-                // "select d in c.branchChildren"
-                // "replace d by c in B"
-                for index = 0 to branches.Count - 1 do
-                    for descendant in branchChildren do
-                        let branchCommit = branches[index]
+                    index
 
-                        if branchCommit = descendant then
-                            branches[index] <- commit
+                else
+                    branches.Add commit
+                    branches.Count - 1
 
-                i
+            for descendant in branchChildren |> Seq.except branchChildren do
+                branches.Remove descendant |> ignore
 
-            else
-                branches.Add commit
-                branches.Count - 1
+            yield x, y, commit
+    }
 
-        for descendant in branchChildren |> Seq.except branchChildren do
-            branches.Remove descendant |> ignore
-
-
-        // { commit = commit; x = branches.IndexOf commit; y = index }
-        printfn $"x:{x} y:{index} \t {commit.messageShort}"
 
 let listCommits (repository: IRepository) =
     let branches =
@@ -196,15 +193,3 @@ let listCommits (repository: IRepository) =
             yield current
             yieldedById.Add(current.id, current)
     }
-
-
-
-// type Commit =
-//     { parents: Commit array
-//       children: Commit array
-//       id : string
-//       messageShort : string
-//       /// <summary>
-//       /// Date committed, not authored
-//       /// </summary>
-//       date : DateTimeOffset }
