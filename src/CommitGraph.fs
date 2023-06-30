@@ -193,3 +193,11 @@ let listCommits (repository: IRepository) =
             yield current
             yieldedById.Add(current.id, current)
     }
+
+
+let toArray2d coordinates =
+    let maxX, _, _ = coordinates |> Array.maxBy (fun (x, _, _) -> x)
+    let _, maxY, _ = coordinates |> Array.maxBy (fun (_, y, _) -> y)
+    let grid = Array2D.create (maxX + 1) (maxY + 1) None
+    for x, y, commit in coordinates do
+        Array2D.set grid x y (Some commit)
