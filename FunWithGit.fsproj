@@ -2,10 +2,12 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net7.0</TargetFramework>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="CreateRepository.fs" />
+    <Compile Include="CommitGraph.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
