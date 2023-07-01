@@ -33,6 +33,27 @@ type Commit =
     override this.GetHashCode() = this.id.GetHashCode()
 
 
+[<CustomEquality; NoComparison; DebuggerDisplay "{messageShort}">]
+type Crommit =
+    { id: string
+      i: int
+      mutable j: int option
+      branchChildren: Crommit list
+      mergeChildren: Crommit list
+      messageShort : string
+      parents: Crommit list }
+    
+    interface IEquatable<Crommit> with
+        member this.Equals other = other.id.Equals this.id
+
+    override this.Equals other =
+        match other with
+        | :? Commit as commit -> (this :> IEquatable<_>).Equals commit
+        | _ -> false
+
+
+    override this.GetHashCode() = this.id.GetHashCode()
+
 
 let sortTemporalTopological (commits: Commit array) =
     let mutable ordered = List()
@@ -112,6 +133,71 @@ let curvedBranches (orderedCommits: Commit List) =
 
             yield x, y, commit
     }
+
+/// <summary>
+/// Computes forbidden j-coordinates for commit c
+/// </summary>
+let computeForbiddenIndices c (activeNodes :Map<string, Set<int>>) =
+    // Find forbidden indices for highest child
+    match c.mergeChildren with
+    | [] -> None
+    | [mergeChild] ->
+        // Highest child is the only child so i min is of that child
+        activeNodes |> Map.tryFind mergeChild.id
+    | mergeChildren ->
+        let highestChild = mergeChildren |> List.minBy (fun d -> d.i)
+        activeNodes |> Map.tryFind highestChild.id 
+    |> Option.defaultValue Set.empty
+
+// List helper to "replace at". Very inefficient
+let replaceAt index item list =
+    list |> List.mapi (fun index' item' -> if index' = index then item else item')
+
+let straightBranches (C: Crommit list) =
+
+    let activeNodes = Map.empty
+    // Initialize an empty list of active branches B
+    let mutable B: Crommit option list = []
+
+    // for c in C from lowest i-coordinate to largest
+    for c in C |> List.sortByDescending (fun c -> c.i) do
+        // compute forbidden j-coordinates J(c)
+        let Jc = computeForbiddenIndices c activeNodes
+        // if {d in c.branchChildren s.t. d.j is not it J(c)}
+        let allowedDescendants =
+            c.branchChildren
+            |> List.filter (fun d -> d.j |> Option.exists (fun dj -> Jc |> Set.contains dj |> not))
+
+        if
+            allowedDescendants
+            // is not empty
+            |> List.isEmpty
+            |> not
+        then
+            // select d in {d in c.branchChildren s.t. d.j is not in J(c)}
+            for d in allowedDescendants do
+                // replace d by c in B
+                // match B |> List.tryFindIndex (fun b -> b |> Option.exists (fun b -> b = d)) with
+                // | None ->
+                //     printfn "Shouldn't happen"
+                //     ()
+                // | Some index ->
+                //     // Replace at
+                //     B <- B |> replaceAt index (Some c)
+                let index' = B |> List.findIndex (Option.exists (fun b -> b = d))
+                B <- B |> replaceAt index' (Some c)
+        else
+            // insert c in B
+            B <- B @ [ Some c ]
+
+        for d' in
+            c.branchChildren
+            |> List.filter (fun d' -> allowedDescendants |> List.contains d' |> not) do
+
+            d'.j |> Option.iter (fun d'j -> B <- B |> replaceAt d'j None)
+
+
+        c.j <- B |> List.findIndex (Option.exists (fun b -> b = c)) |> Some
 
 
 let listCommits (repository: IRepository) =
@@ -199,5 +285,7 @@ let toArray2d coordinates =
     let maxX, _, _ = coordinates |> Array.maxBy (fun (x, _, _) -> x)
     let _, maxY, _ = coordinates |> Array.maxBy (fun (_, y, _) -> y)
     let grid = Array2D.create (maxX + 1) (maxY + 1) None
+
     for x, y, commit in coordinates do
         Array2D.set grid x y (Some commit)
+      

@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="CreateRepository.fs" />
     <Compile Include="CommitGraph.fs" />
+    <Compile Include="Gitamine.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
