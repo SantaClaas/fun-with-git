@@ -3,19 +3,11 @@ module tests.Regression
 
 
 open System
-open System.Collections.Generic
-open System.IO
-open System.Threading
-open System.Threading.Tasks
 open Argon
 open FunWithGit
 open FunWithGit.CommitGraph
-open LibGit2Sharp
 open Microsoft.FSharp.Core
 open Xunit
-open FsUnit.Xunit
-open FsUnit.CustomMatchers
-open Tests
 open VerifyXunit
 open VerifyTests
 
@@ -38,7 +30,7 @@ let ``Can draw Graph 1`` () =
             parent.children <- commit :: parent.children
 
         commit
-    
+
     let result =
         seq {
             (*
