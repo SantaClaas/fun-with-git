@@ -1,7 +1,9 @@
 module FunWithGit.Gitamine
 
 open System
+open System.Buffers
 open System.Collections.Generic
+open System.Text
 open FunWithGit.CommitGraph
 open Microsoft.FSharp.Collections
 open Microsoft.FSharp.Core
@@ -99,8 +101,7 @@ let computePositions (commits: Commit list) =
     let mutable i = 0
     let mutable branches = []
     let mutable activeNodes = Map.empty
-    let activeNodesQueue = PriorityQueue()
-    activeNodes <- activeNodes |> Map.add "index" Set.empty
+    let activeNodesRemoveQueue = PriorityQueue()
 
     for commit in commits do
 
@@ -134,10 +135,11 @@ let computePositions (commits: Commit list) =
         branches <- newBranches
 
         // Remove useless active nodes
-        while activeNodesQueue.Count > 0 && activeNodesQueue.Peek() |> first < i do
-            let commit = activeNodesQueue.Dequeue() |> snd
+        while activeNodesRemoveQueue.Count > 0 && activeNodesRemoveQueue.Peek() |> first < i do
+            let commit = activeNodesRemoveQueue.Dequeue() |> snd
             activeNodes <- activeNodes |> Map.remove commit.id
             ()
+
         // Update the active nodes
         let jToAdd = j :: (branchChildren |> Array.map jPositionOf |> List.ofArray)
 
@@ -149,6 +151,7 @@ let computePositions (commits: Commit list) =
 
         // (Get the highest i of the parents add it to the queue to be removed later?)
         // Get the parent when we want to remove the active nodes?
+        // Get the i for when to remove current commit from active ones. The i is the last parent
         let iRemove =
             match commit.parents with
             //TODO find a better solution to represent -Infinity
@@ -156,7 +159,7 @@ let computePositions (commits: Commit list) =
             | [ one ] -> indexOf one
             | multiple -> multiple |> List.map indexOf |> List.max
 
-        activeNodesQueue.Enqueue((iRemove, commit), iRemove)
+        activeNodesRemoveQueue.Enqueue((iRemove, commit), iRemove)
 
         //TODO is commit to replace only existent when we come from a branching
         // Remove children from active branches
@@ -196,7 +199,157 @@ let computePositions (commits: Commit list) =
 
         // Finally set the position
         positions <- positions |> Map.add commit.id (i, j)
-        Array.set result i (i, j)
+        Array.set result i (i, j, commit)
         i <- i + 1
 
     result
+
+//
+(*
+  ◯
+◯ │   ◯ ─╮
+│ │ ◯ │  ◯
+╰─◯─╯ ◯
+
+
+╭────╮─
+│    │─╭─╮
+╰────╯─╰─╯─
+*)
+
+type CurveDrawInstruction =
+    | LeftToUp
+    | LeftToDown
+    | RightToUp
+    | RightToDown
+
+type LineDrawInstruction =
+    | Horizontal
+    | Vertical
+
+type DrawInstruction =
+    | Curve of CurveDrawInstruction
+    | Line of LineDrawInstruction
+    | Commit
+
+let drawAsString positions =
+
+    let positionByCommit =
+        positions |> Array.map (fun (i, j, commit) -> commit.id, (i, j)) |> Map.ofArray
+
+    let positionOf commit = positionByCommit |> Map.find commit.id
+
+    let rowCount = Array.length positions
+
+    let rowLength =
+        positions
+        |> Array.map (fun (_, j, _) -> j)
+        |> Array.max
+        |> (+) 1
+        |> (+) Environment.NewLine.Length
+
+    let grid = Array.create (rowCount * rowLength) ' '
+    // let grid = Array2D.create (Array.length positions) (maxJ + 1) " "
+
+
+
+
+    // Set row ends to new line
+    let startNewLine = rowLength - Environment.NewLine.Length
+
+    for row = 0 to rowCount - 1 do
+        let start = row * rowLength + (startNewLine)
+        // let end' = row * rowLength + 1 + Environment.NewLine.Length
+        for index = 0 to Environment.NewLine.Length - 1 do
+            let character = Environment.NewLine[index]
+            grid[start + index] <- character
+
+    let drawAt instruction i j =
+       
+        let symbol =
+            match instruction with
+            | Line direction ->
+                match direction with
+                | Horizontal -> '─'
+                | Vertical -> '│'
+
+            | Curve direction ->
+                match direction with
+                | LeftToUp -> '╯'
+                | RightToUp -> '╰'
+                | LeftToDown -> '╮'
+                | RightToDown -> '╭'
+            | Commit -> '█'
+
+
+        let index = (i * rowLength) + j
+        // Replace previous
+        if index - 1 >= 0 then
+            match grid[index - 1], symbol with
+            | '╯', '╯' -> grid[index - 1] <- '┴'
+            | '╰', '╰' -> grid[index] <- '┴'
+            | '╭', '╭' -> grid[index] <- '┬'
+            | '╮', '╮' -> grid[index - 1] <- '┬'
+            | _ -> ()
+        
+        // Don't replace '╮' or other symbols
+        if grid[index] = ' ' then
+            grid[index] <- symbol
+
+    let drawHorizontal from to' i =
+        for j = from to to' do
+            drawAt (Horizontal |> Line) i j
+
+    let drawVertical from to' j =
+        for i = from to to' do
+            drawAt (Vertical |> Line) i j
+
+
+
+    for iCommit, jCommit, commit in positions do
+        // this (U+2588) or"◯"
+        drawAt Commit iCommit jCommit
+        let branchChildren = branchChildrenOf commit
+        let mergeChildren = mergeChildrenOf commit
+
+        // Draw backwards to children
+        for child in branchChildren do
+            let iChild, jChild = positionOf child
+
+            // For branch children we draw to the j of the child
+
+            //  "Go right"
+            if jCommit < jChild then
+                drawHorizontal (jCommit + 1) (jChild - 1) iCommit
+                drawAt (LeftToUp |> Curve) iCommit jChild
+            // set '╯' iCommit jChild
+            // "Go left"
+            elif jChild < jCommit then
+                drawHorizontal (jChild + 1) (jCommit - 1) iCommit
+                drawAt (RightToUp |> Curve) iCommit jChild
+            // set '╰' iCommit jChild
+
+            // Draw line
+            drawVertical (iChild + 1) (iCommit - 1) jChild
+
+        // The commit bubble should have been drawn
+
+        for child in mergeChildren do
+            let iChild, jChild = positionOf child
+
+            //  "Go right"
+            if jCommit < jChild then
+                drawHorizontal (jCommit + 1) (jChild - 1) iChild
+                drawAt (LeftToDown |> Curve) iCommit jChild
+            // set '╮' iCommit jChild
+            // "Go left"
+            elif jChild < jCommit then
+                drawHorizontal (jChild + 1) (jCommit - 1) iChild
+                drawAt (RightToDown |> Curve) iCommit jChild
+            // set '╭' iCommit jChild
+
+            // Draw line
+            drawVertical (iChild + 1) (iCommit - 1) jCommit
+
+
+    String grid
