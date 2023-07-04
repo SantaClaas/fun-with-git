@@ -1,10 +1,12 @@
 module FunWithGit.Gitamine
 
+open System
 open System.Collections.Generic
 open FunWithGit.CommitGraph
-open LibGit2Sharp
+open Microsoft.FSharp.Collections
+open Microsoft.FSharp.Core
 
-type Position = { i: int; j: int }
+type Position = Position of i: int * j: int
 
 type Node =
     | Stash of Position
@@ -17,15 +19,16 @@ type Edge =
 /// <summary>
 /// Computes forbidden j-coordinates for commit c
 /// </summary>
-let computeForbiddenIndices c (activeNodes: Map<string, Set<int>>) =
+let computeForbiddenIndices commit activeNodes indexOf =
+    let mergeChildren = mergeChildrenOf commit
     // Find forbidden indices for highest child
-    match c.mergeChildren with
-    | [] -> None
-    | [ mergeChild ] ->
+    match mergeChildren with
+    | [||] -> None
+    | [| mergeChild |] ->
         // Highest child is the only child so i min is of that child
         activeNodes |> Map.tryFind mergeChild.id
     | mergeChildren ->
-        let highestChild = mergeChildren |> List.minBy (fun d -> d.i)
+        let highestChild = mergeChildren |> Array.minBy indexOf
         activeNodes |> Map.tryFind highestChild.id
     |> Option.defaultValue Set.empty
 
@@ -81,39 +84,51 @@ let insertCommit commit j forbiddenIndices branches =
         let newBranches = branches @ [ Some commit ]
         newBranches, List.length newBranches - 1
 
-let computePositions (crommits: Crommit list) =
+let computePositions (commits: Commit list) =
+    let indicesById =
+        commits |> List.mapi (fun index commit -> commit.id, index) |> Map.ofList
+
+    let indexOf commit = indicesById |> Map.find commit.id
+
     let mutable positions = Map.empty
+    let mutable result = commits |> List.length |> Array.zeroCreate
+    let positionOf child = positions |> Map.find child.id
+    let jPositionOf = positionOf >> snd
 
     //let headSha = (repository |> List.head).id
-    let mutable i = 1
+    let mutable i = 0
     let mutable branches = []
     let mutable activeNodes = Map.empty
     let activeNodesQueue = PriorityQueue()
     activeNodes <- activeNodes |> Map.add "index" Set.empty
 
-    for commit in crommits do
-        let mutable j = -1
-        let commitSha = commit.id
+    for commit in commits do
 
+        let branchChildren = branchChildrenOf commit
         // Compute forbidden indices
-        let forbiddenIndices = computeForbiddenIndices commit activeNodes
+        let forbiddenIndices = computeForbiddenIndices commit activeNodes indexOf
 
         // Find a commit to replace
         // The commit can only replace a child whose first parent is this commit
         let commitToReplace =
-            commit.branchChildren
-            |> List.map (fun child -> positions |> Map.find child.id |> first, child)
-            |> List.filter (fun (jChild, _) -> forbiddenIndices |> Set.contains jChild |> not)
+            branchChildren
+            |> Array.map (fun child -> positionOf child, child)
+            |> Array.filter (fun ((_, jChild), _) -> forbiddenIndices |> Set.contains jChild |> not)
             // Min by j or none
             |> (function
-            | [] -> None
-            | [ child ] -> Some child
-            | children -> children |> List.minBy first |> Some)
+            | [||] -> None
+            | [| child |] -> Some child
+            // There are two strategies we can choose from
+            // 1. Place commit as far left as possible by taking the min of j
+            // | children -> children |> Array.minBy (fst >> snd) |> Some)
+            // 2. Continue the branch that first said this commit is it's parent by taking the min of i
+            | children -> children |> Array.minBy (fst >> fst) |> Some)
+
 
         // Insert the commit in the active branches
         let newBranches, j =
             match commitToReplace with
-            | Some(j, commitToReplace) -> branches |> replaceAt j (Some commitToReplace), j
+            | Some((i, j), commitToReplace) -> branches |> replaceAt j (Some commitToReplace), j
             | None -> branches |> insertCommit commit 0 Set.empty
 
         branches <- newBranches
@@ -122,21 +137,25 @@ let computePositions (crommits: Crommit list) =
         while activeNodesQueue.Count > 0 && activeNodesQueue.Peek() |> first < i do
             let commit = activeNodesQueue.Dequeue() |> snd
             activeNodes <- activeNodes |> Map.remove commit.id
-
+            ()
         // Update the active nodes
-        let jToAdd =
-            j
-            :: (commit.branchChildren
-                |> List.map (fun child -> positions |> Map.find child.id |> snd))
+        let jToAdd = j :: (branchChildren |> Array.map jPositionOf |> List.ofArray)
 
         // Add all j to active nodes
         activeNodes <-
             activeNodes
             |> Map.map (fun _ indices -> indices |> addAll jToAdd)
             |> Map.add commit.id Set.empty
+
         // (Get the highest i of the parents add it to the queue to be removed later?)
         // Get the parent when we want to remove the active nodes?
-        let iRemove = commit.parents |> List.map (fun parent -> parent.i) |> List.max
+        let iRemove =
+            match commit.parents with
+            //TODO find a better solution to represent -Infinity
+            | [] -> Int32.MinValue
+            | [ one ] -> indexOf one
+            | multiple -> multiple |> List.map indexOf |> List.max
+
         activeNodesQueue.Enqueue((iRemove, commit), iRemove)
 
         //TODO is commit to replace only existent when we come from a branching
@@ -144,24 +163,26 @@ let computePositions (crommits: Crommit list) =
         match commitToReplace with
         | Some(j, commitToReplace) ->
             // Get j positions of children
+            // (like for childSha of branchChildren then remove if not commit to replace)
             let childJsToDeleteFromBranches =
-                commit.branchChildren
+                branchChildren
                 // Get children that are not the commit to replace
-                |> List.filter (fun child -> child.id <> commitToReplace.id)
+                |> Array.filter (fun child -> child.id <> commitToReplace.id)
                 // Get j of those and set that position in branch to none
-                |> List.map (fun child -> positions |> Map.find child.id |> snd)
+                |> Array.map jPositionOf
                 |> Set
 
             // Remove branches that are in child js to remove
+
+
             branches <-
                 branches
-                |> List.map (
+                |> List.mapi (fun j ->
                     Option.bind (fun branch ->
-                        if childJsToDeleteFromBranches |> Set.contains branch.id then
+                        if childJsToDeleteFromBranches |> Set.contains j then
                             None
                         else
-                            Some branch)
-                )
+                            Some branch))
         // If commit to replace is none do nothing
         | None -> ()
 
@@ -172,10 +193,10 @@ let computePositions (crommits: Crommit list) =
 
 
 
+
         // Finally set the position
-        positions <- positions |> Map.add commit.id (i, j, commit)
+        positions <- positions |> Map.add commit.id (i, j)
+        Array.set result i (i, j)
         i <- i + 1
 
-    let width = List.length branches
-    
-    ()
+    result
