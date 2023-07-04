@@ -3,11 +3,13 @@ module tests.Regression
 
 
 open System
+open System.Collections.Generic
 open System.IO
 open System.Threading
 open System.Threading.Tasks
 open Argon
 open FunWithGit
+open FunWithGit.CommitGraph
 open LibGit2Sharp
 open Microsoft.FSharp.Core
 open Xunit
@@ -22,62 +24,57 @@ VerifierSettings.AddExtraSettings(fun settings -> settings.NullValueHandling <- 
 [<Fact>]
 let ``Can draw Graph 1`` () =
     // Arrange
-    // Create temp repository
-    let expectedCoordinates =
-        [| (0, 0); (1, 1); (2, 2); (3, 3); (4, 4); (5, 0); (6, 4); (7, 4) |] |> List.ofArray
 
-    let path = $"./temp/tests/test-repository/7B85F3C6-D634-486B-96EA-8FC90B06A4BE/"
+    let createCommit number parents =
+        let commit =
+            { id = $"commit %i{number} id"
+              messageShort = $"Commit %i{number}"
+              date = DateTimeOffset.Now + TimeSpan.FromMinutes(float number)
+              parents = parents
+              children = [] }
 
-    if Directory.Exists path then
-        Directory.Delete(path, true)
+        // Add this commit as child to the parents
+        for parent in parents do
+            parent.children <- commit :: parent.children
 
-    // Act
-    Repository.Init(path) |> ignore
-    use repository = new Repository(path)
-    // Need to sufficiently space out commits or it will cause issues with sorting as time is taken into account
-    let mutable counter = 0
+        commit
+    
+    let result =
+        seq {
+            (*
+            This should represent a graph like this:
+            █       Commit 8
+            │█      Commit 7
+            ││█     Commit 6
+            │││█    Commit 5
+            ││││█   Commit 4
+            █┴┴╯│   Commit 3
+            ╰───█   Commit 2
+                █   Commit 1
+            *)
+            let commit1 = createCommit 1 []
+            let commit2 = createCommit 2 [ commit1 ]
+            let commit3 = createCommit 3 [ commit2 ]
+            let commit4 = createCommit 4 [ commit2 ]
+            let commit5 = createCommit 5 [ commit3 ]
+            let commit6 = createCommit 6 [ commit3 ]
+            let commit7 = createCommit 7 [ commit3 ]
+            let commit8 = createCommit 8 [ commit3 ]
 
-    let signature () =
-        counter <- counter + 1
-        repository.Config.BuildSignature(DateTimeOffset.Now + TimeSpan.FromMinutes counter)
-
-    let createCommit' number = createCommit (signature ()) path number
-
-
-    let createResult =
-        repository
-        // Commit on main
-        |> createCommit' 1
-        // Commit on main
-        |> createCommit' 2
-        // Create branch
-        |> createBranch 1
-        // Switch back to main and commit
-        |> checkoutBranchName main
-        |> Result.bind (
-            createCommit' 3
-            // Back to branch 1 and create commit
-            >> checkoutBranch 1
-        )
-        |> Result.bind (createCommit' 4 >> checkoutBranchName main)
-        |> Result.bind (createBranch 2 >> checkoutBranch 2)
-        |> Result.bind (createCommit' 5 >> checkoutBranchName main)
-        |> Result.bind (createBranch 3 >> checkoutBranch 3)
-        |> Result.bind (createCommit' 6 >> checkoutBranchName main)
-        |> Result.bind (createBranch 4 >> checkoutBranch 4)
-        |> Result.bind (createCommit' 7 >> checkoutBranchName main)
-        |> Result.bind (createBranch 5 >> checkoutBranch 5)
-        |> Result.bind (createCommit' 8 >> checkoutBranchName main)
-        |> Result.map (
-            CommitGraph.listCommits
-            >> Seq.take 8
-            >> Seq.toArray
-            >> CommitGraph.sortTemporalTopological
-            >> Gitamine.computePositions
-            >> Gitamine.drawAsString
-        )
+            // Commits appear in reverse order on the graph
+            yield commit8
+            yield commit7
+            yield commit6
+            yield commit5
+            yield commit4
+            yield commit3
+            yield commit2
+            yield commit1
+        }
+        |> List.ofSeq
+        // Act
+        |> Gitamine.computePositions
+        |> Gitamine.drawAsString
 
     // Assert
-    match createResult with
-    | Ok resultValue ->  Verifier.Verify(resultValue).ToTask() 
-    | Error errorValue -> failwith "todo"
+    Verifier.Verify(result).ToTask()
